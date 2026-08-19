@@ -56,6 +56,7 @@ import AuditLogs from './pages/admin/operations';
 import Permissions from './pages/admin/permissions';
 import QuotaManagement from './pages/admin/quota';
 import BusinessManagement from './pages/admin/business';
+import ModelGateway from './pages/admin/gateway';
 
 function ProtectedRoute({ children, requiredRole }: { children: React.ReactElement; requiredRole?: string }) {
   const { isAuthenticated, user } = useAuth();
@@ -128,6 +129,7 @@ function AppInner() {
             <Route path="permissions" element={<Permissions />} />
             <Route path="quota" element={<QuotaManagement />} />
             <Route path="business" element={<BusinessManagement />} />
+            <Route path="gateway" element={<ModelGateway />} />
             <Route path="business/create-tenant" element={<CreateTenant />} />
             <Route path="users" element={<UserManagement />} />
             <Route path="users/create" element={<CreateUser />} />
@@ -155,4 +157,3 @@ export default function App() {
     </ThemeProvider>
   );
 }
-

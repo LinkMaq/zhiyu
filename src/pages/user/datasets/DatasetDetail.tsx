@@ -1,16 +1,19 @@
 import { useEffect, useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
 import {
   Database, ArrowLeft, Download, Layers, Calendar,
-  BarChart2, Globe, Lock, FileText, GitBranch, Eye, ShieldCheck, Share2
+  BarChart2, Lock, FileText, GitBranch, Eye, ShieldCheck, Share2, Star, MessageSquare, Building2, Network
 } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
 import { Button } from '../../../components/ui/Button';
 import { Tabs } from '../../../components/ui/Tabs';
 import { Badge } from '../../../components/ui/Badge';
+import { Modal } from '../../../components/ui/Modal';
 import { Input, Select } from '../../../components/ui/Input';
+import { MarketplaceReviewsPanel } from '../../../components/marketplace/MarketplaceReviewsPanel';
 import { useToast } from '../../../hooks/useToast';
-import { mockDatasets } from '../../../data/mockDatasets';
+import { getRuntimeDatasets, saveRuntimeDatasets } from '../../../data/mockDatasetsRuntime';
+import { applyMarketplaceReview, type MarketplaceReview } from '../../../data/mockMarketplaceOperations';
 import {
   getDatasetRuntimeState,
   updateDatasetRuntimeState,
@@ -21,7 +24,14 @@ import type {
   OperationRecord,
   OperationType,
 } from '../../../data/mockDatasetRuntime';
-import type { DatasetVersion, DatasetTask } from '../../../types';
+import type {
+  Dataset,
+  DatasetPublicationPolicy,
+  DatasetPublishScope,
+  DatasetSharePermission,
+  DatasetVersion,
+  DatasetTask,
+} from '../../../types';
 
 const OP_TYPE_LABEL: Record<OperationType, string> = {
   view: '查看',
@@ -62,11 +72,50 @@ function nextVersionName(versions: DatasetVersion[]) {
   return `v${versions.length + 1}.0`;
 }
 
+const SCOPE_META: Record<DatasetPublishScope, { label: string; description: string; target: string; icon: typeof Lock; accessLevel: Dataset['accessLevel'] }> = {
+  workspace: {
+    label: '工作空间',
+    description: '仅指定工作空间成员可检索和访问，默认不向租户或平台目录暴露。',
+    target: '智慧医疗研发空间',
+    icon: Lock,
+    accessLevel: 'private',
+  },
+  tenant: {
+    label: '租户',
+    description: '在当前租户内独立发布；其他租户及平台目录均无权访问。',
+    target: '中国电信 AI 研究院',
+    icon: Building2,
+    accessLevel: 'team',
+  },
+  platform: {
+    label: '平台',
+    description: '发布到平台资产目录；外部下载与二次使用仍受独立策略控制。',
+    target: '智云平台资产目录',
+    icon: Network,
+    accessLevel: 'public',
+  },
+};
+
+function defaultPublicationPolicy(dataset: Dataset): DatasetPublicationPolicy {
+  const scope: DatasetPublishScope = dataset.accessLevel === 'public' ? 'platform' : dataset.accessLevel === 'team' ? 'tenant' : 'workspace';
+  return {
+    scope,
+    targetName: SCOPE_META[scope].target,
+    accessPermission: scope === 'workspace' ? 'manage' : 'download',
+    approvalRequired: scope === 'platform',
+    externalDownloadAllowed: scope !== 'platform',
+    updatedAt: dataset.updatedAt,
+    updatedBy: dataset.creator,
+  };
+}
+
 export default function DatasetDetail() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
-  const [tab, setTab] = useState('basic');
-  const ds = mockDatasets.find(d => d.id === id) ?? mockDatasets[0];
+  const [tab, setTab] = useState(() => searchParams.get('tab') === 'reviews' ? 'reviews' : 'basic');
+  const [datasets, setDatasets] = useState(() => getRuntimeDatasets());
+  const ds = useMemo(() => datasets.find(dataset => dataset.id === id) ?? datasets[0], [datasets, id]);
   const runtime = getDatasetRuntimeState(ds);
   const [versions, setVersions] = useState<DatasetVersion[]>(runtime.versions);
   const [operationRecords, setOperationRecords] = useState<OperationRecord[]>(runtime.operationRecords);
@@ -77,8 +126,20 @@ export default function DatasetDetail() {
   const [tagInput, setTagInput] = useState('');
   const [compareLeft, setCompareLeft] = useState(ds.versions[0]?.version ?? '');
   const [compareRight, setCompareRight] = useState(ds.versions[1]?.version ?? ds.versions[0]?.version ?? '');
+  const [showPublicationModal, setShowPublicationModal] = useState(false);
+  const [publicationForm, setPublicationForm] = useState<DatasetPublicationPolicy>(() => defaultPublicationPolicy(ds));
 
   const currentUser = '张远航';
+  const publicationPolicy = ds.publicationPolicy ?? defaultPublicationPolicy(ds);
+  const PublicationScopeIcon = SCOPE_META[publicationPolicy.scope].icon;
+
+  const handleReview = (review: Pick<MarketplaceReview, 'rating' | 'comment'>) => {
+    const nextDatasets = datasets.map(dataset => dataset.id === ds.id ? applyMarketplaceReview(dataset, review.rating) : dataset);
+    setDatasets(nextDatasets);
+    saveRuntimeDatasets(nextDatasets);
+    addOperation('modify', `发布 ${review.rating} 分评价`);
+    toast.success('评论已发布', `已更新「${ds.name}」的评分与热度`);
+  };
 
   const buildMetaSnapshot = (version: string, tags: string[] = datasetTags): DatasetMetaSnapshot => ({
     version,
@@ -98,7 +159,6 @@ export default function DatasetDetail() {
 
   useEffect(() => {
     addOperation('view', '查看数据集详情');
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
@@ -159,9 +219,44 @@ export default function DatasetDetail() {
     toast.info('预览数据', `${ds.name} 预览窗口已打开`);
   };
 
-  const handleShare = () => {
-    addOperation('share', '共享数据集给团队成员');
-    toast.success('共享成功', `${ds.name} 已共享到团队空间`);
+  const openPublicationManager = () => {
+    setPublicationForm(ds.publicationPolicy ?? defaultPublicationPolicy(ds));
+    setShowPublicationModal(true);
+  };
+
+  const selectPublishScope = (scope: DatasetPublishScope) => {
+    setPublicationForm(prev => ({
+      ...prev,
+      scope,
+      targetName: SCOPE_META[scope].target,
+      accessPermission: scope === 'workspace' ? 'manage' : 'download',
+      approvalRequired: scope === 'platform',
+      externalDownloadAllowed: scope !== 'platform',
+    }));
+  };
+
+  const handlePublicationSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!publicationForm.targetName.trim()) {
+      toast.warning('缺少发布目标', '请填写工作空间、租户或平台资产目录名称');
+      return;
+    }
+    const policy: DatasetPublicationPolicy = {
+      ...publicationForm,
+      targetName: publicationForm.targetName.trim(),
+      updatedAt: new Date().toISOString().slice(0, 10),
+      updatedBy: currentUser,
+    };
+    const nextDatasets = datasets.map(dataset => dataset.id === ds.id ? {
+      ...dataset,
+      accessLevel: SCOPE_META[policy.scope].accessLevel,
+      publicationPolicy: policy,
+    } : dataset);
+    setDatasets(nextDatasets);
+    saveRuntimeDatasets(nextDatasets);
+    addOperation('share', `发布至${SCOPE_META[policy.scope].label}：${policy.targetName}（${policy.accessPermission} 权限）`);
+    setShowPublicationModal(false);
+    toast.success('发布策略已生效', `「${ds.name}」已发布至${SCOPE_META[policy.scope].label}，层级隔离策略已更新`);
   };
 
   const handleAddTag = () => {
@@ -289,7 +384,9 @@ export default function DatasetDetail() {
           <div>
             <div className="flex items-center gap-2 mb-1">
               <h1 className="text-xl font-bold text-text-primary">{ds.name}</h1>
-              {ds.accessLevel === 'public' ? <Globe size={14} className="text-text-muted" /> : <Lock size={14} className="text-text-muted" />}
+              <span className="flex items-center gap-1 rounded border border-primary/25 bg-primary/10 px-2 py-0.5 text-[11px] text-primary">
+                <PublicationScopeIcon size={11} /> {SCOPE_META[publicationPolicy.scope].label}发布
+              </span>
               {ds.encryptionEnabled && (
                 <span className="flex items-center gap-1 text-[11px] text-warning border border-warning/30 bg-warning/10 rounded px-2 py-0.5">
                   <ShieldCheck size={11} /> 加密
@@ -301,13 +398,15 @@ export default function DatasetDetail() {
               <span className="flex items-center gap-1"><Layers size={11} />{ds.size}</span>
               <span className="flex items-center gap-1"><BarChart2 size={11} />{ds.records.toLocaleString()} 样本</span>
               <span className="flex items-center gap-1"><Download size={11} />{ds.downloads} 下载</span>
+              <span className="flex items-center gap-1"><Star size={11} className="text-warning" />{ds.rating.toFixed(1)} 评分</span>
+              <span className="flex items-center gap-1"><MessageSquare size={11} />{ds.reviews} 评论</span>
               <span className="flex items-center gap-1"><Calendar size={11} />更新于 {ds.updatedAt.slice(0, 10)}</span>
             </div>
           </div>
         </div>
         <div className="flex gap-2">
           <Button variant="outline" leftIcon={<Eye size={14} />} onClick={handlePreview}>预览数据</Button>
-          <Button variant="outline" leftIcon={<Share2 size={14} />} onClick={handleShare}>共享数据集</Button>
+          <Button variant="outline" leftIcon={<Share2 size={14} />} onClick={openPublicationManager}>发布与权限</Button>
           <Button leftIcon={<Download size={14} />} onClick={handleDownload}>下载数据集</Button>
         </div>
       </div>
@@ -315,6 +414,7 @@ export default function DatasetDetail() {
       <Tabs
         tabs={[
           { key: 'basic', label: '基础信息', icon: <FileText size={14} /> },
+          { key: 'reviews', label: '评价与评论', icon: <MessageSquare size={13} />, count: ds.reviews },
           { key: 'detail', label: '详细信息', icon: <FileText size={14} /> },
           { key: 'tags', label: '标签设置', icon: <FileText size={14} /> },
           { key: 'operations', label: '操作记录', icon: <FileText size={14} />, count: operationRecords.length },
@@ -372,8 +472,42 @@ export default function DatasetDetail() {
                 ))}
               </div>
             </Card>
+            <Card>
+              <div className="mb-3 flex items-center justify-between">
+                <h3 className="text-sm font-semibold text-text-primary">发布与权限</h3>
+                <Badge variant={publicationPolicy.scope === 'platform' ? 'accent' : publicationPolicy.scope === 'tenant' ? 'secondary' : 'ghost'}>
+                  {SCOPE_META[publicationPolicy.scope].label}
+                </Badge>
+              </div>
+              <div className="space-y-2 text-xs">
+                <div className="flex items-start justify-between gap-3">
+                  <span className="text-text-muted">发布目标</span>
+                  <span className="max-w-[170px] text-right text-text-secondary">{publicationPolicy.targetName}</span>
+                </div>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-text-muted">默认权限</span>
+                  <span className="text-text-secondary">{publicationPolicy.accessPermission === 'manage' ? '协同管理' : publicationPolicy.accessPermission === 'download' ? '可下载' : '仅查看'}</span>
+                </div>
+                <div className="rounded-lg border border-border bg-white/[0.03] p-2.5 text-text-muted leading-5">
+                  {SCOPE_META[publicationPolicy.scope].description}
+                </div>
+              </div>
+              <Button size="sm" variant="outline" className="mt-3 w-full" leftIcon={<ShieldCheck size={12} />} onClick={openPublicationManager}>
+                管理发布策略
+              </Button>
+            </Card>
           </div>
         </div>
+      )}
+
+      {tab === 'reviews' && (
+        <MarketplaceReviewsPanel
+          key={`dataset-${ds.id}`}
+          asset={ds}
+          assetType="dataset"
+          currentUser={currentUser}
+          onSubmit={handleReview}
+        />
       )}
 
       {tab === 'detail' && (
@@ -597,6 +731,137 @@ export default function DatasetDetail() {
           </div>
         </Card>
       )}
+
+      <Modal
+        title={`发布与权限管理：${ds.name}`}
+        open={showPublicationModal}
+        onClose={() => setShowPublicationModal(false)}
+        width="xl"
+      >
+        <form onSubmit={handlePublicationSubmit} className="space-y-5">
+          <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-3 text-xs leading-5 text-text-secondary">
+            发布范围遵循由小到大的隔离边界：工作空间 {'->'} 租户 {'->'} 平台。资产不会自动向上级目录同步，必须由拥有者明确选择目标层级并提交策略。
+          </div>
+
+          <div>
+            <p className="mb-3 text-sm font-semibold text-text-primary">选择发布层级</p>
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+              {(Object.keys(SCOPE_META) as DatasetPublishScope[]).map(scope => {
+                const meta = SCOPE_META[scope];
+                const ScopeIcon = meta.icon;
+                const isActive = publicationForm.scope === scope;
+                return (
+                  <button
+                    key={scope}
+                    type="button"
+                    onClick={() => selectPublishScope(scope)}
+                    className={`rounded-xl border p-4 text-left transition-colors ${isActive ? 'border-primary/50 bg-primary/10' : 'border-border bg-white/[0.02] hover:border-primary/30'}`}
+                  >
+                    <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-lg ${isActive ? 'bg-primary/20 text-primary' : 'bg-white/5 text-text-muted'}`}>
+                      <ScopeIcon size={17} />
+                    </div>
+                    <p className="text-sm font-semibold text-text-primary">{meta.label}</p>
+                    <p className="mt-1 text-xs leading-5 text-text-muted">{meta.description}</p>
+                    <p className={`mt-3 text-[11px] ${isActive ? 'text-primary' : 'text-text-muted'}`}>{isActive ? '当前发布层级' : '选择此层级'}</p>
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <Input
+              label="发布目标"
+              value={publicationForm.targetName}
+              onChange={event => setPublicationForm(prev => ({ ...prev, targetName: event.target.value }))}
+              placeholder={SCOPE_META[publicationForm.scope].target}
+              required
+            />
+            <Select
+              label="默认访问权限"
+              value={publicationForm.accessPermission}
+              onChange={event => setPublicationForm(prev => ({ ...prev, accessPermission: event.target.value as DatasetSharePermission }))}
+              options={[
+                { value: 'read', label: '仅查看元信息' },
+                { value: 'download', label: '查看与下载' },
+                { value: 'manage', label: '协同管理' },
+              ]}
+            />
+          </div>
+
+          <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+            <PermissionSwitch
+              label="访问申请审批"
+              description={publicationForm.scope === 'platform' ? '平台用户在访问前必须经资产管理员审批。' : '工作空间或租户内按既有成员关系进行访问。'}
+              checked={publicationForm.approvalRequired}
+              onChange={() => setPublicationForm(prev => ({ ...prev, approvalRequired: !prev.approvalRequired }))}
+            />
+            <PermissionSwitch
+              label="允许平台外下载"
+              description={publicationForm.scope === 'platform' ? '关闭后仅允许受控任务与在线预览使用数据。' : '非平台发布资产不会向平台外部开放下载。'}
+              checked={publicationForm.externalDownloadAllowed}
+              disabled={publicationForm.scope !== 'platform'}
+              onChange={() => setPublicationForm(prev => ({ ...prev, externalDownloadAllowed: !prev.externalDownloadAllowed }))}
+            />
+          </div>
+
+          <div className="rounded-xl border border-border bg-white/[0.02] p-4">
+            <div className="mb-3 flex items-center gap-2">
+              <ShieldCheck size={15} className="text-success" />
+              <p className="text-sm font-semibold text-text-primary">层级隔离检查</p>
+            </div>
+            <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
+              {(Object.keys(SCOPE_META) as DatasetPublishScope[]).map(scope => {
+                const isCurrent = scope === publicationForm.scope;
+                return (
+                  <div key={scope} className={`rounded-lg border p-3 ${isCurrent ? 'border-success/30 bg-success/10' : 'border-border bg-base/40'}`}>
+                    <p className="font-medium text-text-primary">{SCOPE_META[scope].label}</p>
+                    <p className={`mt-1 ${isCurrent ? 'text-success' : 'text-text-muted'}`}>
+                      {isCurrent ? `已显式发布：${publicationForm.targetName || SCOPE_META[scope].target}` : '未授权访问，保持隔离'}
+                    </p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
+          <div className="flex justify-end gap-3">
+            <Button type="button" variant="outline" onClick={() => setShowPublicationModal(false)}>取消</Button>
+            <Button type="submit" leftIcon={<Share2 size={14} />}>保存发布策略</Button>
+          </div>
+        </form>
+      </Modal>
+    </div>
+  );
+}
+
+function PermissionSwitch({
+  label,
+  description,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <div className={`flex items-center justify-between gap-4 rounded-xl border border-border p-3 ${disabled ? 'opacity-60' : ''}`}>
+      <div>
+        <p className="text-sm font-medium text-text-primary">{label}</p>
+        <p className="mt-1 text-xs leading-5 text-text-muted">{description}</p>
+      </div>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onChange}
+        className={`relative h-5 w-10 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed ${checked ? 'bg-primary' : 'bg-white/20'}`}
+      >
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+      </button>
     </div>
   );
 }

@@ -6,7 +6,8 @@ import {
   Boxes, BarChart3, ScrollText, ShieldCheck, Gauge, Building2, Network,
   ShieldAlert,
   Cloud,
-  FileText
+  FileText,
+  Waypoints
 } from 'lucide-react';
 
 interface NavItem {
@@ -37,6 +38,7 @@ const adminNav: NavItem[] = [
   { path: '/admin/kubernetes', label: 'K8s 集群', icon: <Server size={18} /> },
   { path: '/admin/resources', label: '资源池', icon: <Boxes size={18} /> },
   { path: '/admin/monitoring', label: '监控告警', icon: <BarChart3 size={18} /> },
+  { path: '/admin/gateway', label: '模型网关', icon: <Waypoints size={18} /> },
   { path: '/admin/apikeys', label: 'API 密钥', icon: <KeyRound size={18} /> },
   { path: '/admin/sensitive', label: '敏感词管理', icon: <ShieldAlert size={18} /> },
   { path: '/admin/operations', label: '操作审计', icon: <ScrollText size={18} /> },

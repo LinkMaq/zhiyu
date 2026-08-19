@@ -1,4 +1,5 @@
 import type { ContainerImage, K8sCluster, ResourcePool, GpuDevice, StorageVolume, Alert, AuditLog, ApiKey, AppSpace, OnlineFileSystem, ComputeSpec, TenantSpecLimit } from '../types';
+import { mockAppMarketplaceExtensions } from './mockAppMarketplace';
 
 // ============ Container Images ============
 export const mockImages: ContainerImage[] = [
@@ -541,6 +542,7 @@ export const mockApps: AppSpace[] = [
     { time: '16:01:06', level: 'info', message: '构建完成，正在执行部署编排' },
     { time: '15:58:49', level: 'info', message: 'Git main@a1b2c3d 同步成功，等待镜像发布' },
   ], healthScore: 89, lastDeployedAt: '2026-05-31 16:02', coverImage: '', createdAt: '2026-05-18', updatedAt: '2026-06-01 16:02', hasDemoTrial: true, industry: ['政务', '教育', '能源'], accessLevel: 'tenant', subscribeCount: 206 },
+  ...mockAppMarketplaceExtensions,
 ];
 
 // ============ Monitoring Metrics (time series) ============

@@ -68,6 +68,10 @@ interface CreateInstanceInput {
   gpuCount: number;
   storage: string;
   mounts: DevInstanceMount[];
+  templateName?: string;
+  repository?: string;
+  branch?: string;
+  startupCommand?: string;
   creator: string;
   namespace: string;
 }
@@ -111,6 +115,10 @@ export function appendRuntimeInstance(input: CreateInstanceInput): DevInstance {
     idleMinutes: 0,
     creator: input.creator,
     namespace: input.namespace,
+    templateName: input.templateName,
+    repository: input.repository,
+    branch: input.branch,
+    startupCommand: input.startupCommand,
   };
 
   const next = [newInstance, ...instances];

@@ -15,10 +15,15 @@ import {
   Package,
   Play,
   Plus,
+  Share2,
+  ShieldCheck,
   Settings,
   Square,
   Trash2,
   TrendingUp,
+  Building2,
+  Lock,
+  Network,
   XCircle,
   Zap,
 } from 'lucide-react';
@@ -39,7 +44,12 @@ import {
   saveRuntimeBatchJobs,
   saveRuntimeInferenceServices,
 } from '../../../data/mockInferenceRuntime';
-import type { InferenceService } from '../../../types';
+import type {
+  InferenceAccessPermission,
+  InferencePublicationPolicy,
+  InferencePublishScope,
+  InferenceService,
+} from '../../../types';
 
 const statusMeta: Record<string, { label: string; variant: 'success' | 'ghost' | 'secondary' | 'error' }> = {
   running:  { label: '运行中',   variant: 'success' },
@@ -111,6 +121,53 @@ const batchStatusMeta: Record<BatchJob['status'], { icon: ReactElement; variant:
   failed: { icon: <XCircle size={12} className="text-error" />, variant: 'error', label: '失败' },
   queued: { icon: <Clock size={12} className="text-warning" />, variant: 'warning', label: '排队中' },
 };
+
+const SERVICE_SCOPE_META: Record<InferencePublishScope, { label: string; description: string; target: string; icon: typeof Lock }> = {
+  workspace: {
+    label: '工作空间',
+    description: '仅当前工作空间成员可调用，租户与平台目录均不可见。',
+    target: '推理服务工作空间',
+    icon: Lock,
+  },
+  tenant: {
+    label: '租户',
+    description: '仅当前租户身份可调用，其他租户和平台公共目录默认隔离。',
+    target: '中国电信 AI 研究院',
+    icon: Building2,
+  },
+  platform: {
+    label: '平台',
+    description: '发布到平台服务目录；公网调用仍受审批、QPS 和鉴权限制。',
+    target: '智云平台服务目录',
+    icon: Network,
+  },
+};
+
+function defaultServicePublicationPolicy(service: InferenceService): InferencePublicationPolicy {
+  const scope: InferencePublishScope = service.namespace === 'production' ? 'tenant' : 'workspace';
+  return {
+    scope,
+    targetName: scope === 'workspace' ? `${service.namespace} 工作空间` : SERVICE_SCOPE_META[scope].target,
+    accessPermission: 'invoke',
+    approvalRequired: false,
+    publicEndpointEnabled: false,
+    rateLimitQps: Math.max(10, Math.min(service.qps || 30, 500)),
+    updatedAt: service.createdAt.slice(0, 10),
+    updatedBy: service.creator,
+  };
+}
+
+function getPublishedServiceEndpoint(
+  service: InferenceService,
+  policy: Pick<InferencePublicationPolicy, 'scope'>,
+) {
+  const serviceName = service.endpoint.split('/').filter(Boolean).pop()
+    ?? service.name.toLowerCase().replace(/[^a-z0-9-]/g, '-');
+  const namespace = service.namespace.toLowerCase().replace(/[^a-z0-9-]/g, '-') || 'default';
+  if (policy.scope === 'workspace') return `https://ws-${namespace}.gateway.zhiyun.ai/v1/infer/${serviceName}`;
+  if (policy.scope === 'tenant') return `https://tenant.gateway.zhiyun.ai/v1/infer/${serviceName}`;
+  return `https://api.zhiyun.ai/v1/infer/${serviceName}`;
+}
 
 function createDefaultPolicy(service: InferenceService): ElasticPolicy {
   return {
@@ -213,6 +270,17 @@ export default function InferencePage() {
   const [batchJobs, setBatchJobs] = useState<BatchJob[]>(() => getRuntimeBatchJobs());
   const [metricsServiceId, setMetricsServiceId] = useState<string | null>(null);
   const [metricsTick, setMetricsTick] = useState(0);
+  const [publishServiceId, setPublishServiceId] = useState<string | null>(null);
+  const [publicationForm, setPublicationForm] = useState<InferencePublicationPolicy>({
+    scope: 'workspace',
+    targetName: '推理服务工作空间',
+    accessPermission: 'invoke',
+    approvalRequired: false,
+    publicEndpointEnabled: false,
+    rateLimitQps: 30,
+    updatedAt: '',
+    updatedBy: '张远航',
+  });
 
 
   const onlineServices = useMemo(() => services.filter(service => service.framework !== 'batch'), [services]);
@@ -233,6 +301,10 @@ export default function InferencePage() {
     () => services.find(service => service.id === metricsServiceId) ?? null,
     [metricsServiceId, services],
   );
+  const publishService = useMemo(
+    () => services.find(service => service.id === publishServiceId) ?? null,
+    [publishServiceId, services],
+  );
   const perfSnapshot = useMemo(
     () => (metricsService ? createPerfSnapshot(metricsService, metricsTick) : null),
     [metricsService, metricsTick],
@@ -245,6 +317,40 @@ export default function InferencePage() {
   const openScaleModal = (service: InferenceService) => {
     setScaleServiceId(service.id);
     setScaleForm(elasticPolicies[service.id] ?? createDefaultPolicy(service));
+  };
+
+  const openPublicationModal = (service: InferenceService) => {
+    setPublishServiceId(service.id);
+    setPublicationForm(service.publicationPolicy ?? defaultServicePublicationPolicy(service));
+  };
+
+  const selectPublicationScope = (scope: InferencePublishScope) => {
+    setPublicationForm(prev => ({
+      ...prev,
+      scope,
+      targetName: SERVICE_SCOPE_META[scope].target,
+      approvalRequired: scope === 'platform',
+      publicEndpointEnabled: false,
+    }));
+  };
+
+  const handlePublicationSubmit = (event: React.FormEvent) => {
+    event.preventDefault();
+    if (!publishServiceId || !publicationForm.targetName.trim()) return;
+    const service = services.find(item => item.id === publishServiceId);
+    if (!service) return;
+    const policy: InferencePublicationPolicy = {
+      ...publicationForm,
+      targetName: publicationForm.targetName.trim(),
+      rateLimitQps: Math.max(1, Number(publicationForm.rateLimitQps) || 1),
+      updatedAt: new Date().toISOString().slice(0, 10),
+      updatedBy: '张远航',
+    };
+    const nextServices = services.map(item => item.id === publishServiceId ? { ...item, publicationPolicy: policy } : item);
+    setServices(nextServices);
+    saveRuntimeInferenceServices(nextServices);
+    setPublishServiceId(null);
+    toast.success('服务发布策略已生效', `「${service.name}」已发布至${SERVICE_SCOPE_META[policy.scope].label}，其余层级保持隔离`);
   };
 
   const handleToggle = (id: string, current: string) => {
@@ -533,6 +639,7 @@ export default function InferencePage() {
 
           {pdServices.map((service, index) => {
             const policy = elasticPolicies[service.id] ?? createDefaultPolicy(service);
+            const publicationPolicy = service.publicationPolicy ?? defaultServicePublicationPolicy(service);
             const routerReplicas = Math.max(1, Math.ceil(service.replicas / 3));
             const prefillReplicas = service.prefillReplicas ?? 1;
             const decodeReplicas = service.decodeReplicas ?? Math.max(1, service.replicas - 1);
@@ -547,7 +654,7 @@ export default function InferencePage() {
                       <Badge variant="ghost">{service.framework}</Badge>
                       <Badge variant={policy.strategy === 'schedule' ? 'warning' : 'success'}>{policy.strategy === 'schedule' ? '定时扩缩容' : '指标扩缩容'}</Badge>
                     </div>
-                    <p className="text-xs text-text-muted">{service.model} · {service.gpuType} ×{service.gpuCount} · Endpoint: {service.endpoint}</p>
+                    <p className="text-xs text-text-muted">{service.model} · {service.gpuType} ×{service.gpuCount} · 发布地址: {getPublishedServiceEndpoint(service, publicationPolicy)}</p>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
                     <Button size="sm" variant="outline" leftIcon={<TrendingUp size={12} />} onClick={() => openScaleModal(service)}>弹性配置</Button>
@@ -605,6 +712,7 @@ export default function InferencePage() {
           {onlineServices.map((service, index) => {
             const meta = statusMeta[service.status] ?? { label: service.status, variant: 'ghost' as const };
             const policy = elasticPolicies[service.id] ?? createDefaultPolicy(service);
+            const publicationPolicy = service.publicationPolicy ?? defaultServicePublicationPolicy(service);
             const replicaUtilization = service.maxReplicas > 0 ? Math.round((service.replicas / service.maxReplicas) * 100) : 0;
             return (
               <Card key={service.id} glow={service.status === 'running'} className={`card-hover hover-lift animate-slide-up stagger-${index % 6}`}>
@@ -619,13 +727,20 @@ export default function InferencePage() {
                         <h3 className="text-sm font-semibold text-text-primary">{service.name}</h3>
                         <Badge variant={meta.variant}>{meta.label}</Badge>
                         <Badge variant="ghost">{service.framework}</Badge>
+                        <Badge variant={publicationPolicy.scope === 'platform' ? 'accent' : publicationPolicy.scope === 'tenant' ? 'secondary' : 'ghost'}>
+                          {SERVICE_SCOPE_META[publicationPolicy.scope].label}发布
+                        </Badge>
                         {service.pdSeparation && <Badge variant="accent"><GitBranch size={10} className="mr-1" />PD 分离</Badge>}
                         <Badge variant={policy.strategy === 'schedule' ? 'warning' : 'success'}>{policy.strategy === 'schedule' ? '定时扩缩容' : '指标自动扩缩'}</Badge>
                       </div>
                       <p className="text-xs text-text-muted">{service.model} · {service.gpuType} ×{service.gpuCount} · {service.creator}</p>
+                      <p className="mt-1 truncate font-mono text-[11px] text-text-muted" title={getPublishedServiceEndpoint(service, publicationPolicy)}>
+                        发布地址：{getPublishedServiceEndpoint(service, publicationPolicy)}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2 flex-wrap">
+                    <Button size="sm" variant="outline" leftIcon={<Share2 size={12} />} onClick={() => openPublicationModal(service)}>服务发布</Button>
                     <Button size="sm" variant="outline" leftIcon={<Activity size={12} />} onClick={() => setMetricsServiceId(service.id)}>指标详情</Button>
                     <Button size="sm" variant="outline" leftIcon={<BarChart2 size={12} />} onClick={() => openScaleModal(service)}>弹性配置</Button>
                     <Button size="sm" variant="ghost" leftIcon={<Settings size={12} />}>配置</Button>
@@ -717,7 +832,7 @@ export default function InferencePage() {
                       <span>服务模式</span>
                       <Badge variant="ghost">{service.deployMode === 'model' ? '模型部署' : '镜像部署'}</Badge>
                     </div>
-                    <p className="text-sm font-semibold text-text-primary">{service.endpoint}</p>
+                    <p className="break-all text-sm font-semibold text-text-primary">{getPublishedServiceEndpoint(service, publicationPolicy)}</p>
                     <p className="text-[11px] text-text-muted mt-2">可用性 {service.availability}% · 命名空间 {service.namespace}</p>
                   </div>
                 </div>
@@ -727,13 +842,134 @@ export default function InferencePage() {
         </div>
       ))}
 
+      <Modal
+        title={`服务发布与权限：${publishService?.name ?? ''}`}
+        open={!!publishServiceId}
+        onClose={() => setPublishServiceId(null)}
+        width="xl"
+      >
+        {publishService && (
+          <form onSubmit={handlePublicationSubmit} className="space-y-5">
+            <div className="rounded-xl border border-primary/20 bg-primary/[0.05] p-3 text-xs leading-5 text-text-secondary">
+              推理服务的发布边界由工作空间、租户、平台逐层扩展。服务不会自动跨层暴露；未选择的层级无法发现 Endpoint，也无法通过 API Key 调用。
+            </div>
+
+            <div>
+              <p className="mb-3 text-sm font-semibold text-text-primary">服务发布范围</p>
+              <div className="grid grid-cols-1 gap-3 md:grid-cols-3">
+                {(Object.keys(SERVICE_SCOPE_META) as InferencePublishScope[]).map(scope => {
+                  const meta = SERVICE_SCOPE_META[scope];
+                  const ScopeIcon = meta.icon;
+                  const isActive = publicationForm.scope === scope;
+                  return (
+                    <button
+                      key={scope}
+                      type="button"
+                      onClick={() => selectPublicationScope(scope)}
+                      className={`rounded-xl border p-4 text-left transition-colors ${isActive ? 'border-primary/50 bg-primary/10' : 'border-border bg-white/[0.02] hover:border-primary/30'}`}
+                    >
+                      <div className={`mb-3 flex h-9 w-9 items-center justify-center rounded-lg ${isActive ? 'bg-primary/20 text-primary' : 'bg-white/5 text-text-muted'}`}>
+                        <ScopeIcon size={17} />
+                      </div>
+                      <p className="text-sm font-semibold text-text-primary">{meta.label}</p>
+                      <p className="mt-1 text-xs leading-5 text-text-muted">{meta.description}</p>
+                      <p className={`mt-3 text-[11px] ${isActive ? 'text-primary' : 'text-text-muted'}`}>{isActive ? '当前发布层级' : '选择此层级'}</p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+              <Input
+                label="发布目标"
+                value={publicationForm.targetName}
+                onChange={event => setPublicationForm(prev => ({ ...prev, targetName: event.target.value }))}
+                placeholder={SERVICE_SCOPE_META[publicationForm.scope].target}
+                required
+              />
+              <Select
+                label="默认权限"
+                value={publicationForm.accessPermission}
+                onChange={event => setPublicationForm(prev => ({ ...prev, accessPermission: event.target.value as InferenceAccessPermission }))}
+                options={[
+                  { value: 'invoke', label: '可调用服务' },
+                  { value: 'manage', label: '协同管理服务' },
+                ]}
+              />
+              <Input
+                label="调用上限 (QPS)"
+                type="number"
+                min={1}
+                value={publicationForm.rateLimitQps}
+                onChange={event => setPublicationForm(prev => ({ ...prev, rateLimitQps: Number(event.target.value) || 1 }))}
+              />
+            </div>
+
+            <div className="rounded-xl border border-accent/25 bg-accent/[0.06] p-4">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-semibold text-text-primary">发布调用地址</p>
+                <Badge variant="accent">{SERVICE_SCOPE_META[publicationForm.scope].label}网关</Badge>
+              </div>
+              <code className="mt-2 block break-all rounded-lg border border-border bg-base px-3 py-2 text-xs text-accent">
+                {getPublishedServiceEndpoint(publishService, publicationForm)}
+              </code>
+              <p className="mt-2 text-xs leading-5 text-text-muted">
+                切换发布层级会生成新的网关地址。原地址不会自动开放给新层级，调用方需使用目标层级的 API Key 与权限策略访问。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+              <ServicePublicationSwitch
+                label="调用申请审批"
+                description={publicationForm.scope === 'platform' ? '平台调用方申请 API 调用权限时，需要由服务管理员审批。' : '当前层级按既有成员关系和 API Key 进行鉴权。'}
+                checked={publicationForm.approvalRequired}
+                onChange={() => setPublicationForm(prev => ({ ...prev, approvalRequired: !prev.approvalRequired }))}
+              />
+              <ServicePublicationSwitch
+                label="启用平台公开 Endpoint"
+                description={publicationForm.scope === 'platform' ? '开启后仍会实施 API Key、审批与 QPS 限流。' : '仅发布至平台层级时可启用公网 Endpoint。'}
+                checked={publicationForm.publicEndpointEnabled}
+                disabled={publicationForm.scope !== 'platform'}
+                onChange={() => setPublicationForm(prev => ({ ...prev, publicEndpointEnabled: !prev.publicEndpointEnabled }))}
+              />
+            </div>
+
+            <div className="rounded-xl border border-border bg-white/[0.02] p-4">
+              <div className="mb-3 flex items-center gap-2">
+                <ShieldCheck size={15} className="text-success" />
+                <p className="text-sm font-semibold text-text-primary">层级隔离状态</p>
+              </div>
+              <div className="grid grid-cols-1 gap-2 text-xs md:grid-cols-3">
+                {(Object.keys(SERVICE_SCOPE_META) as InferencePublishScope[]).map(scope => {
+                  const isCurrent = publicationForm.scope === scope;
+                  return (
+                    <div key={scope} className={`rounded-lg border p-3 ${isCurrent ? 'border-success/30 bg-success/10' : 'border-border bg-base/40'}`}>
+                      <p className="font-medium text-text-primary">{SERVICE_SCOPE_META[scope].label}</p>
+                      <p className={`mt-1 ${isCurrent ? 'text-success' : 'text-text-muted'}`}>
+                        {isCurrent ? `已显式发布：${publicationForm.targetName || SERVICE_SCOPE_META[scope].target}` : '不发现服务，禁止调用'}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="flex justify-end gap-3">
+              <Button type="button" variant="outline" onClick={() => setPublishServiceId(null)}>取消</Button>
+              <Button type="submit" leftIcon={<Share2 size={14} />}>保存发布策略</Button>
+            </div>
+          </form>
+        )}
+      </Modal>
+
       <Modal title="推理实例性能指标" open={!!metricsServiceId} onClose={() => setMetricsServiceId(null)} width="lg">
         {metricsService && perfSnapshot ? (
           <div className="space-y-4">
             <div className="flex items-start justify-between gap-3 flex-wrap">
               <div>
                 <p className="text-sm font-semibold text-text-primary">{metricsService.name}</p>
-                <p className="text-xs text-text-muted mt-1">{metricsService.model} · {metricsService.gpuType} ×{metricsService.gpuCount} · {metricsService.endpoint}</p>
+                <p className="text-xs text-text-muted mt-1">{metricsService.model} · {metricsService.gpuType} ×{metricsService.gpuCount} · {getPublishedServiceEndpoint(metricsService, metricsService.publicationPolicy ?? defaultServicePublicationPolicy(metricsService))}</p>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
                 <Badge variant="success">实时刷新</Badge>
@@ -902,3 +1138,33 @@ export default function InferencePage() {
   );
 }
 
+function ServicePublicationSwitch({
+  label,
+  description,
+  checked,
+  disabled = false,
+  onChange,
+}: {
+  label: string;
+  description: string;
+  checked: boolean;
+  disabled?: boolean;
+  onChange: () => void;
+}) {
+  return (
+    <div className={`flex items-center justify-between gap-4 rounded-xl border border-border p-3 ${disabled ? 'opacity-60' : ''}`}>
+      <div>
+        <p className="text-sm font-medium text-text-primary">{label}</p>
+        <p className="mt-1 text-xs leading-5 text-text-muted">{description}</p>
+      </div>
+      <button
+        type="button"
+        disabled={disabled}
+        onClick={onChange}
+        className={`relative h-5 w-10 shrink-0 rounded-full transition-colors disabled:cursor-not-allowed ${checked ? 'bg-primary' : 'bg-white/20'}`}
+      >
+        <span className={`absolute top-0.5 h-4 w-4 rounded-full bg-white transition-transform ${checked ? 'translate-x-5' : 'translate-x-0.5'}`} />
+      </button>
+    </div>
+  );
+}
