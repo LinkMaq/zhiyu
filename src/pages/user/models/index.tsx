@@ -2,7 +2,7 @@ import { useEffect, useState, useMemo } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
 import {
   BrainCircuit, Search, Filter, Download, Star, Upload,
-  Cpu, Tag, Trash2, CheckSquare, Square, ChevronDown,
+  Cpu, Tag, Trash2, ChevronDown,
   Lock, Globe, ShieldCheck, GitBranch, Flame, BookOpen,
   Users, Building2, MessageSquare, TrendingUp, Pin, Award, ArrowUpRight, CalendarClock, Share2
 } from 'lucide-react';
@@ -15,6 +15,11 @@ import { Pagination } from '../../../components/ui/Pagination';
 import { Modal } from '../../../components/ui/Modal';
 import { Input, Select } from '../../../components/ui/Input';
 import { getRuntimeModels, saveRuntimeModels } from '../../../data/mockModelRuntime';
+import {
+  getMarketplaceHeat,
+  rankMarketplaceAssets,
+  type MarketplaceRankingMetric,
+} from '../../../data/mockMarketplaceOperations';
 import type { Model } from '../../../types';
 import { useToast } from '../../../hooks/useToast';
 
@@ -61,21 +66,9 @@ export default function ModelsPage() {
   const [tagQuery, setTagQuery] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [showFrameworkMenu, setShowFrameworkMenu] = useState(false);
-  const [selected, setSelected] = useState<Set<string>>(new Set());
   const [models, setModels] = useState<Model[]>(() => getRuntimeModels());
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Model | null>(null);
-  const [showExport, setShowExport] = useState(false);
-  const [exportTarget, setExportTarget] = useState<Model | null>(null);
-  const [exportForm, setExportForm] = useState({
-    format: 'safetensors',
-    encryption: 'aes',
-    sdkEncrypt: true,
-    transferEncrypt: true,
-    tokenProtected: true,
-    authToken: '',
-  });
-  const [exporting, setExporting] = useState(false);
   const [showPublish, setShowPublish] = useState(false);
   const [publishTarget, setPublishTarget] = useState<Model | null>(null);
   const [publishing, setPublishing] = useState(false);
@@ -90,11 +83,9 @@ export default function ModelsPage() {
     dailyQuota: 20000,
     expiresAt: '',
   });
-  const [hotSort, setHotSort] = useState<'downloads' | 'stars' | 'rating'>('downloads');
-  const [showReview, setShowReview] = useState(false);
-  const [reviewTarget, setReviewTarget] = useState<Model | null>(null);
-  const [reviewForm, setReviewForm] = useState({ score: 5, comment: '' });
+  const [hotSort, setHotSort] = useState<MarketplaceRankingMetric>('heat');
   const [highlightId, setHighlightId] = useState('');
+  const [referenceNow] = useState(() => Date.now());
 
   const currentUser = '张远航';
 
@@ -105,29 +96,31 @@ export default function ModelsPage() {
   useEffect(() => {
     const tabParam = searchParams.get('tab');
     const modelParam = searchParams.get('model');
-    if (tabParam && ['public', 'mine', 'featured', 'hot'].includes(tabParam)) {
-      setTab(tabParam);
-      setPage(1);
-    }
-    if (modelParam) {
-      setHighlightId(modelParam);
-      setSelectedCategory('全部');
-      setSelectedFramework('全部框架');
-      setShowFilter(false);
-      const target = models.find(item => item.id === modelParam);
-      if (target) {
-        setSearch(target.name);
-        toast.success('已定位到新导入模型', `模型「${target.name}」已显示在当前列表`);
+    const target = modelParam ? models.find(item => item.id === modelParam) : undefined;
+    queueMicrotask(() => {
+      if (tabParam && ['public', 'mine', 'featured', 'hot'].includes(tabParam)) {
+        setTab(tabParam);
+        setPage(1);
       }
-    }
+      if (modelParam) {
+        setHighlightId(modelParam);
+        setSelectedCategory('全部');
+        setSelectedFramework('全部框架');
+        setShowFilter(false);
+        if (target) {
+          setSearch(target.name);
+          toast.success('已定位到新导入模型', `模型「${target.name}」已显示在当前列表`);
+        }
+      }
+    });
   }, [searchParams, models, toast]);
 
   const hotData = useMemo(() => {
-    return [...models].sort((a, b) => b[hotSort] - a[hotSort]).slice(0, 10);
+    return rankMarketplaceAssets(models, hotSort).slice(0, 10);
   }, [models, hotSort]);
 
   const filtered = useMemo(() => {
-    const now = Date.now();
+    const now = referenceNow;
     const createdRangeDays: Record<string, number> = {
       '30d': 30,
       '90d': 90,
@@ -189,35 +182,10 @@ export default function ModelsPage() {
     createdRange,
     tagQuery,
     hotData,
+    referenceNow,
   ]);
 
   const pageData = filtered.slice((page - 1) * 9, page * 9);
-
-  const toggleSelect = (id: string) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
-  };
-
-  const selectAll = () => {
-    if (selected.size === pageData.length && pageData.length > 0) setSelected(new Set());
-    else setSelected(new Set(pageData.map(m => m.id)));
-  };
-
-  const handleBatchDelete = () => {
-    const selectedModels = models.filter(item => selected.has(item.id));
-    const forbidden = selectedModels.filter(item => item.creator !== currentUser);
-    if (forbidden.length > 0) {
-      toast.warning('仅空间创建者可删除', `以下模型不在您的删除范围：${forbidden.map(item => item.name).slice(0, 3).join('、')}`);
-      return;
-    }
-    setModels(prev => prev.filter(m => !selected.has(m.id)));
-    toast.success(`已删除 ${selected.size} 个模型`);
-    setSelected(new Set());
-    setShowDeleteConfirm(false);
-  };
 
   const handleSingleDelete = (target: Model) => {
     if (target.creator !== currentUser) {
@@ -269,29 +237,6 @@ export default function ModelsPage() {
     toast.success('共享策略已生效', '已完成跨空间/跨团队授权并设置调用限制');
   };
 
-  const handleExport = async (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!exportTarget) return;
-    if (exportForm.tokenProtected && !exportForm.authToken.trim()) {
-      toast.warning('缺少授权 Token', '请填写授权 Token 后再导出');
-      return;
-    }
-    setExporting(true);
-    await new Promise(r => setTimeout(r, 1000));
-    setExporting(false);
-    setShowExport(false);
-    const algoLabel = exportForm.encryption === 'sm4' ? 'SM4' : 'AES-256';
-    toast.success(`「${exportTarget.name}」已加入安全导出队列（${exportForm.format.toUpperCase()} · ${algoLabel}）`, '文件将通过 SDK 本地加密后上传，密文传输并以密文落盘');
-    setExportForm({
-      format: 'safetensors',
-      encryption: 'aes',
-      sdkEncrypt: true,
-      transferEncrypt: true,
-      tokenProtected: true,
-      authToken: '',
-    });
-  };
-
   const handlePublish = async (newLevel: string) => {
     if (!publishTarget) return;
     setPublishing(true);
@@ -312,20 +257,6 @@ export default function ModelsPage() {
       toast.success(next ? '已标记为精选' : '已取消精选', `「${m.name}」`);
       return { ...m, featured: next };
     }));
-  };
-
-  const handleReview = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!reviewTarget) return;
-    setModels(prev => prev.map(m => {
-      if (m.id !== reviewTarget.id) return m;
-      const newReviews = m.reviews + 1;
-      const newRating = parseFloat(((m.rating * m.reviews + reviewForm.score) / newReviews).toFixed(1));
-      return { ...m, reviews: newReviews, rating: newRating };
-    }));
-    toast.success('评价提交成功', `您对「${reviewTarget.name}」的评分已记录`);
-    setShowReview(false);
-    setReviewForm({ score: 5, comment: '' });
   };
 
   const renderStars = (rating: number) => {
@@ -359,7 +290,7 @@ export default function ModelsPage() {
           { key: 'hot', label: '热度榜', icon: <Flame size={13} /> },
         ]}
         active={tab}
-        onChange={v => { setTab(v); setPage(1); setSelected(new Set()); }}
+        onChange={v => { setTab(v); setPage(1); }}
       />
 
       {/* Toolbar */}
@@ -467,29 +398,7 @@ export default function ModelsPage() {
         </Card>
       )}
 
-      {/* Batch action bar */}
-      {selected.size > 0 && (
-        <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/10 border border-primary/20 rounded-lg">
-          <span className="text-sm text-primary font-medium">已选 {selected.size} 项</span>
-          <div className="flex items-center gap-2 ml-auto">
-            <Button size="sm" variant="outline" leftIcon={<Download size={13} />}
-              onClick={() => { toast.success(`开始导出 ${selected.size} 个模型`); setSelected(new Set()); }}>批量导出</Button>
-            <Button size="sm" variant="outline" leftIcon={<Trash2 size={13} />}
-              onClick={() => { setDeleteTarget(null); setShowDeleteConfirm(true); }}
-              className="text-error border-error/30 hover:bg-error/10">批量删除</Button>
-          </div>
-        </div>
-      )}
-
-      <div className="flex items-center gap-2">
-        <button onClick={selectAll} className="flex items-center gap-1.5 text-xs text-text-muted hover:text-text-primary transition-colors">
-          {selected.size === pageData.length && pageData.length > 0
-            ? <CheckSquare size={13} className="text-primary" />
-            : <Square size={13} />}
-          全选当前页
-        </button>
-        <span className="text-xs text-text-muted ml-2">共 {filtered.length} 个模型</span>
-      </div>
+      <p className="text-xs text-text-muted">共 {filtered.length} 个模型</p>
 
       {/* Hot leaderboard */}
       {tab === 'hot' && (
@@ -500,7 +409,7 @@ export default function ModelsPage() {
               <h3 className="text-sm font-semibold text-text-primary">模型热度榜 TOP 10</h3>
             </div>
             <div className="flex items-center gap-1">
-              {([['downloads', '下载量'], ['stars', '收藏数'], ['rating', '综合评分']] as const).map(([k, l]) => (
+              {([['heat', '综合热度'], ['downloads', '下载量'], ['stars', '收藏数'], ['rating', '综合评分']] as const).map(([k, l]) => (
                 <button key={k} onClick={() => setHotSort(k)}
                   className={`px-2.5 py-1 text-xs rounded border transition-colors ${hotSort === k ? 'bg-primary/15 border-primary/40 text-primary' : 'border-border text-text-muted hover:text-text-primary'}`}>
                   {l}
@@ -527,16 +436,17 @@ export default function ModelsPage() {
                   <p className="text-xs text-text-muted truncate">{m.description}</p>
                 </div>
                 <div className="flex items-center gap-4 shrink-0 text-xs text-text-muted">
+                  <span className="flex items-center gap-1 text-primary"><Flame size={11} />{getMarketplaceHeat(m)}</span>
                   <span className="flex items-center gap-1"><Download size={11} />{m.downloads.toLocaleString()}</span>
                   <span className="flex items-center gap-1"><Star size={11} className="text-warning" />{m.stars}</span>
                   {renderStars(m.rating)}
                   <span className="flex items-center gap-1"><MessageSquare size={11} />{m.reviews}</span>
                 </div>
                 <div className="flex items-center gap-1.5 shrink-0">
-                  <button onClick={() => { setReviewTarget(m); setShowReview(true); }}
+                  <Link to={`/user/models/${m.id}?tab=reviews`}
                     className="flex items-center gap-1 text-xs px-2 py-1 rounded border border-border text-text-muted hover:text-primary hover:border-primary/40 transition-colors">
                     <MessageSquare size={11} />评价
-                  </button>
+                  </Link>
                   <TrendingUp size={12} className="text-success" />
                 </div>
               </div>
@@ -552,19 +462,11 @@ export default function ModelsPage() {
             {pageData.map(m => (
               <Card
                 key={m.id}
-                className={`group/card h-full transition-all duration-200 ${selected.has(m.id) ? 'border-primary/40 ring-1 ring-primary/30 bg-primary/[0.03]' : 'hover:border-primary/30 hover:bg-elevated'} ${highlightId === m.id ? 'border-success/50 ring-1 ring-success/30' : ''} ${m.featured ? 'border-warning/20' : ''}`}
+                className={`group/card h-full transition-all duration-200 hover:border-primary/30 hover:bg-elevated ${highlightId === m.id ? 'border-success/50 ring-1 ring-success/30' : ''} ${m.featured ? 'border-warning/20' : ''}`}
               >
-                <div className="flex items-center justify-between mb-4">
-                  <button
-                    onClick={() => toggleSelect(m.id)}
-                    className={`w-8 h-8 flex items-center justify-center rounded-lg border transition-colors ${selected.has(m.id) ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border bg-white/5 text-text-muted hover:text-primary hover:border-primary/40'}`}
-                    title="选择模型"
-                  >
-                    {selected.has(m.id) ? <CheckSquare size={15} className="text-primary" /> : <Square size={15} />}
-                  </button>
-                  <div className="flex items-center gap-1 p-1 rounded-full border border-border/70 bg-white/[0.03] backdrop-blur-sm">
-                    {tab === 'mine' && (
-                      <>
+                {tab === 'mine' && (
+                  <div className="flex justify-end mb-4">
+                    <div className="flex items-center gap-1 p-1 rounded-full border border-border/70 bg-white/[0.03] backdrop-blur-sm">
                         <button
                           onClick={() => { setPublishTarget(m); setShowPublish(true); }}
                           className="w-8 h-8 flex items-center justify-center rounded-full text-text-muted hover:text-primary hover:bg-primary/10 transition-colors"
@@ -593,17 +495,9 @@ export default function ModelsPage() {
                         >
                           <Trash2 size={13} />
                         </button>
-                      </>
-                    )}
-                    <button
-                      onClick={() => { setExportTarget(m); setShowExport(true); }}
-                      className="w-8 h-8 flex items-center justify-center rounded-full text-text-muted hover:text-primary hover:bg-primary/10 transition-colors"
-                      title="导出模型"
-                    >
-                      <Download size={13} />
-                    </button>
+                    </div>
                   </div>
-                </div>
+                )}
 
                 <Link to={`/user/models/${m.id}`} className="block">
                   <div className="hover:opacity-95 transition-opacity">
@@ -673,29 +567,24 @@ export default function ModelsPage() {
       )}
 
       <Modal
-        title={deleteTarget ? `删除模型：${deleteTarget.name}` : `批量删除模型`}
+        title={`删除模型：${deleteTarget?.name ?? ''}`}
         open={showDeleteConfirm}
         onClose={() => { setShowDeleteConfirm(false); setDeleteTarget(null); }}
         width="sm"
       >
         <div className="space-y-4">
           <div className="rounded-lg border border-error/30 bg-error/10 p-3 text-sm text-error">
-            {deleteTarget
-              ? `确认删除模型「${deleteTarget.name}」？删除后版本快照与共享规则将一并清除，且不可恢复。`
-              : `确认删除已选 ${selected.size} 个模型？删除后版本快照与共享规则将一并清除，且不可恢复。`}
+            {`确认删除模型「${deleteTarget?.name ?? ''}」？删除后版本快照与共享规则将一并清除，且不可恢复。`}
           </div>
           <div className="flex gap-3">
             <Button
               className="flex-1 bg-error/80 hover:bg-error text-white border-none"
               onClick={() => {
-                if (deleteTarget) {
-                  setModels(prev => prev.filter(item => item.id !== deleteTarget.id));
-                  toast.success('模型已删除', `已删除 ${deleteTarget.name}`);
-                  setDeleteTarget(null);
-                  setShowDeleteConfirm(false);
-                  return;
-                }
-                handleBatchDelete();
+                if (!deleteTarget) return;
+                setModels(prev => prev.filter(item => item.id !== deleteTarget.id));
+                toast.success('模型已删除', `已删除 ${deleteTarget.name}`);
+                setDeleteTarget(null);
+                setShowDeleteConfirm(false);
               }}
             >
               确认删除
@@ -770,94 +659,6 @@ export default function ModelsPage() {
         </form>
       </Modal>
 
-      {/* Export Model Modal */}
-      <Modal title={`导出模型：${exportTarget?.name ?? ''}`} open={showExport} onClose={() => setShowExport(false)} width="sm">
-        <form onSubmit={handleExport} className="space-y-4">
-          <Select
-            label="导出格式"
-            value={exportForm.format}
-            onChange={e => setExportForm(f => ({ ...f, format: e.target.value }))}
-            options={[
-              { value: 'safetensors', label: 'SafeTensors（推荐）' },
-              { value: 'gguf', label: 'GGUF（量化推理）' },
-              { value: 'onnx', label: 'ONNX（跨平台部署）' },
-              { value: 'torchscript', label: 'TorchScript' },
-            ]}
-          />
-          <Select
-            label="模型文件加密算法"
-            value={exportForm.encryption}
-            onChange={e => setExportForm(f => ({ ...f, encryption: e.target.value }))}
-            options={[
-              { value: 'aes', label: 'AES-256-GCM（推荐）' },
-              { value: 'sm4', label: 'SM4-GCM（国密）' },
-            ]}
-          />
-          <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-border">
-            <div>
-              <p className="text-sm text-text-primary font-medium">SDK 本地加密</p>
-              <p className="text-xs text-text-muted mt-0.5">客户端通过 SDK 先加密再上传，传输与存储全程密文</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setExportForm(f => ({ ...f, sdkEncrypt: !f.sdkEncrypt }))}
-              className={`w-10 h-5 rounded-full transition-colors relative shrink-0 ${exportForm.sdkEncrypt ? 'bg-primary' : 'bg-white/20'}`}
-            >
-              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${exportForm.sdkEncrypt ? 'translate-x-5' : 'translate-x-0.5'}`} />
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-border">
-            <div>
-              <p className="text-sm text-text-primary font-medium">传输链路加密</p>
-              <p className="text-xs text-text-muted mt-0.5">TLS 1.3 通道传输密文模型分片</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setExportForm(f => ({ ...f, transferEncrypt: !f.transferEncrypt }))}
-              className={`w-10 h-5 rounded-full transition-colors relative shrink-0 ${exportForm.transferEncrypt ? 'bg-primary' : 'bg-white/20'}`}
-            >
-              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${exportForm.transferEncrypt ? 'translate-x-5' : 'translate-x-0.5'}`} />
-            </button>
-          </div>
-
-          <div className="flex items-center justify-between p-3 bg-white/5 rounded-lg border border-border">
-            <div>
-              <p className="text-sm text-text-primary font-medium">授权 Token 解密</p>
-              <p className="text-xs text-text-muted mt-0.5">推理运行时按授权 Token 解密加载，明文不落盘</p>
-            </div>
-            <button
-              type="button"
-              onClick={() => setExportForm(f => ({ ...f, tokenProtected: !f.tokenProtected, authToken: '' }))}
-              className={`w-10 h-5 rounded-full transition-colors relative shrink-0 ${exportForm.tokenProtected ? 'bg-primary' : 'bg-white/20'}`}
-            >
-              <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white transition-transform ${exportForm.tokenProtected ? 'translate-x-5' : 'translate-x-0.5'}`} />
-            </button>
-          </div>
-
-          {exportForm.tokenProtected && (
-            <Input
-              label="授权 Token"
-              placeholder="输入解密授权 Token"
-              value={exportForm.authToken}
-              onChange={e => setExportForm(f => ({ ...f, authToken: e.target.value }))}
-              required
-            />
-          )}
-
-          <div className="text-xs text-text-muted bg-white/5 border border-border rounded-lg p-3 space-y-1">
-            <p>安全链路：存储加密 {'->'} 传输加密 {'->'} 运行解密 {'->'} 明文不落盘</p>
-            <p>当前策略：{exportForm.encryption === 'sm4' ? 'SM4' : 'AES-256'} / SDK 本地加密 {exportForm.sdkEncrypt ? '已启用' : '未启用'} / TLS 传输 {exportForm.transferEncrypt ? '已启用' : '未启用'}</p>
-          </div>
-          <div className="flex gap-3">
-            <Button type="submit" loading={exporting} className="flex-1" leftIcon={<Download size={14} />}>
-              {exporting ? '导出中...' : '开始导出'}
-            </Button>
-            <Button type="button" variant="outline" onClick={() => setShowExport(false)}>取消</Button>
-          </div>
-        </form>
-      </Modal>
-
       {/* Tiered Publish Modal (需求67) */}
       <Modal title={`分级发布：${publishTarget?.name ?? ''}`} open={showPublish} onClose={() => setShowPublish(false)} width="sm">
         {publishTarget && (
@@ -895,33 +696,6 @@ export default function ModelsPage() {
         )}
       </Modal>
 
-      {/* Review Modal (需求72) */}
-      <Modal title={`评价模型：${reviewTarget?.name ?? ''}`} open={showReview} onClose={() => setShowReview(false)} width="sm">
-        <form onSubmit={handleReview} className="space-y-4">
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-2">综合评分</label>
-            <div className="flex items-center gap-2">
-              {[1, 2, 3, 4, 5].map(s => (
-                <button key={s} type="button" onClick={() => setReviewForm(f => ({ ...f, score: s }))}>
-                  <Star size={24} className={s <= reviewForm.score ? 'text-warning fill-warning' : 'text-border'} />
-                </button>
-              ))}
-              <span className="text-sm text-text-muted ml-1">{reviewForm.score} / 5</span>
-            </div>
-          </div>
-          <div>
-            <label className="block text-xs font-medium text-text-secondary mb-1.5">评价内容（可选）</label>
-            <textarea value={reviewForm.comment} onChange={e => setReviewForm(f => ({ ...f, comment: e.target.value }))}
-              placeholder="分享您的使用体验…"
-              rows={3}
-              className="w-full bg-base border border-border rounded-lg px-3 py-2 text-sm text-text-primary resize-none focus:outline-none focus:border-primary/60" />
-          </div>
-          <div className="flex gap-3">
-            <Button type="submit" className="flex-1" leftIcon={<Star size={14} />}>提交评价</Button>
-            <Button type="button" variant="outline" onClick={() => setShowReview(false)}>取消</Button>
-          </div>
-        </form>
-      </Modal>
     </div>
   );
 }

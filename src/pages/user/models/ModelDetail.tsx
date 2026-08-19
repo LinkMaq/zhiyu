@@ -1,20 +1,23 @@
 import { useMemo, useState } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { ArrowLeft, BrainCircuit, Download, Star, Cpu, Tag, Cloud, Code2, Zap, TrendingDown, ShieldCheck, KeyRound, Lock, CheckCircle2, RotateCcw, History, SplitSquareVertical } from 'lucide-react';
+import { useParams, Link, useSearchParams } from 'react-router-dom';
+import { ArrowLeft, BrainCircuit, Download, Star, Cpu, Tag, Cloud, Code2, Zap, TrendingDown, ShieldCheck, KeyRound, Lock, CheckCircle2, RotateCcw, History, SplitSquareVertical, MessageSquare } from 'lucide-react';
 import { Card } from '../../../components/ui/Card';
 import { Badge } from '../../../components/ui/Badge';
 import { Button } from '../../../components/ui/Button';
 import { Tabs } from '../../../components/ui/Tabs';
 import { Input, Select } from '../../../components/ui/Input';
+import { MarketplaceReviewsPanel } from '../../../components/marketplace/MarketplaceReviewsPanel';
 import { useToast } from '../../../hooks/useToast';
 import { getRuntimeModels, saveRuntimeModels } from '../../../data/mockModelRuntime';
+import { applyMarketplaceReview, type MarketplaceReview } from '../../../data/mockMarketplaceOperations';
 import type { ModelVersion } from '../../../types';
 
 export default function ModelDetail() {
   const { id } = useParams();
+  const [searchParams] = useSearchParams();
   const { toast } = useToast();
   const [models, setModels] = useState(() => getRuntimeModels());
-  const [tab, setTab] = useState('overview');
+  const [tab, setTab] = useState(() => searchParams.get('tab') === 'reviews' ? 'reviews' : 'overview');
   const [compareBase, setCompareBase] = useState<string>('');
   const [compareTarget, setCompareTarget] = useState<string>('');
   const [quantFormat, setQuantFormat] = useState<'fp16' | 'int8' | 'int4'>('fp16');
@@ -31,6 +34,13 @@ export default function ModelDetail() {
 
   const compareBaseVersion = model.versions.find(v => v.version === compareBase);
   const compareTargetVersion = model.versions.find(v => v.version === compareTarget);
+
+  const handleReview = (review: Pick<MarketplaceReview, 'rating' | 'comment'>) => {
+    const nextModels = models.map(item => item.id === model.id ? applyMarketplaceReview(item, review.rating) : item);
+    setModels(nextModels);
+    saveRuntimeModels(nextModels);
+    toast.success('评论已发布', `已更新「${model.name}」的评分与热度`);
+  };
 
   const rollbackVersion = async (targetVersion: ModelVersion) => {
     if (!model) return;
@@ -117,6 +127,8 @@ export default function ModelDetail() {
             <span className="flex items-center gap-1"><Cpu size={11} />{model.parameters}</span>
             <span className="flex items-center gap-1"><Download size={11} />{model.downloads} 下载</span>
             <span className="flex items-center gap-1"><Star size={11} />{model.stars} 收藏</span>
+            <span className="flex items-center gap-1"><Star size={11} className="text-warning" />{model.rating.toFixed(1)} 评分</span>
+            <span className="flex items-center gap-1"><MessageSquare size={11} />{model.reviews} 评论</span>
             <span className="flex items-center gap-1"><Tag size={11} />{model.license}</span>
             <span className="flex items-center gap-1"><Tag size={11} />{model.creator}</span>
           </div>
@@ -134,6 +146,7 @@ export default function ModelDetail() {
       <Tabs
         tabs={[
           { key: 'overview', label: '概览' },
+          { key: 'reviews', label: '评价与评论', icon: <MessageSquare size={13} />, count: model.reviews },
           { key: 'versions', label: '版本快照', count: model.versions.length },
           { key: 'security', label: '安全防护', icon: <ShieldCheck size={13} /> },
           { key: 'compare', label: '版本对比' },
@@ -192,6 +205,16 @@ export default function ModelDetail() {
             </div>
           </Card>
         </div>
+      )}
+
+      {tab === 'reviews' && (
+        <MarketplaceReviewsPanel
+          key={`model-${model.id}`}
+          asset={model}
+          assetType="model"
+          currentUser="张远航"
+          onSubmit={handleReview}
+        />
       )}
 
       {tab === 'versions' && (

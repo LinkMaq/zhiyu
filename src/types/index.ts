@@ -29,6 +29,18 @@ export type DatasetStatus = 'active' | 'archived' | 'frozen';
 export type DatasetCategory = 'nlp' | 'cv' | 'multimodal' | 'tabular' | 'audio' | 'video';
 export type DatasetTask = 'classification' | 'detection' | 'generation' | 'segmentation' | 'translation' | 'qa' | 'ner';
 export type DatasetAccessLevel = 'private' | 'team' | 'public';
+export type DatasetPublishScope = 'workspace' | 'tenant' | 'platform';
+export type DatasetSharePermission = 'read' | 'download' | 'manage';
+
+export interface DatasetPublicationPolicy {
+  scope: DatasetPublishScope;
+  targetName: string;
+  accessPermission: DatasetSharePermission;
+  approvalRequired: boolean;
+  externalDownloadAllowed: boolean;
+  updatedAt: string;
+  updatedBy: string;
+}
 
 export interface DatasetVersion {
   version: string;
@@ -70,6 +82,7 @@ export interface Dataset {
   collectionMethod: string;
   encryptionEnabled: boolean;
   watermarkEnabled: boolean;
+  publicationPolicy?: DatasetPublicationPolicy;
 }
 
 // ============ Model Types ============
@@ -196,6 +209,10 @@ export interface DevInstance {
   idleMinutes: number;
   creator: string;
   namespace: string;
+  templateName?: string;
+  repository?: string;
+  branch?: string;
+  startupCommand?: string;
 }
 
 // ============ Training Types ============
@@ -260,6 +277,19 @@ export interface DataPreheatTask {
 
 // ============ Inference Types ============
 export type InferenceStatus = 'running' | 'stopped' | 'deploying' | 'stopping' | 'error' | 'scaling';
+export type InferencePublishScope = 'workspace' | 'tenant' | 'platform';
+export type InferenceAccessPermission = 'invoke' | 'manage';
+
+export interface InferencePublicationPolicy {
+  scope: InferencePublishScope;
+  targetName: string;
+  accessPermission: InferenceAccessPermission;
+  approvalRequired: boolean;
+  publicEndpointEnabled: boolean;
+  rateLimitQps: number;
+  updatedAt: string;
+  updatedBy: string;
+}
 
 export interface InferenceService {
   id: string;
@@ -291,6 +321,7 @@ export interface InferenceService {
   prefillReplicas?: number;
   decodeReplicas?: number;
   batchSize?: number;
+  publicationPolicy?: InferencePublicationPolicy;
 }
 
 // ============ Image Registry Types ============

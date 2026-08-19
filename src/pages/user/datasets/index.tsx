@@ -3,7 +3,8 @@ import {
   Database, Search, Filter, Upload, Download,
   Calendar, Globe, Lock, Layers, BarChart2,
   ArrowUpDown, Tag, Trash2, Archive, CheckSquare,
-  Square, ChevronDown, Clock, Eye, GitBranch, ShieldCheck
+  Square, ChevronDown, Clock, Eye, GitBranch, ShieldCheck,
+  Star, MessageSquare, Flame, Award, TrendingUp
 } from 'lucide-react';
 import { PageHeader } from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
@@ -12,6 +13,11 @@ import { Button } from '../../../components/ui/Button';
 import { Tabs } from '../../../components/ui/Tabs';
 import { Pagination } from '../../../components/ui/Pagination';
 import { getRuntimeDatasets, saveRuntimeDatasets } from '../../../data/mockDatasetsRuntime';
+import {
+  getMarketplaceHeat,
+  rankMarketplaceAssets,
+  type MarketplaceRankingMetric,
+} from '../../../data/mockMarketplaceOperations';
 import type { Dataset, DatasetTask, DatasetAccessLevel } from '../../../types';
 import { Link } from 'react-router-dom';
 import { useToast } from '../../../hooks/useToast';
@@ -27,7 +33,7 @@ const taskBadge: Record<string, React.ReactNode> = {
   'anomaly-detection': <Badge variant="error">异常检测</Badge>,
 };
 
-type SortKey = 'updatedAt' | 'createdAt' | 'category' | 'creator' | 'usageFrequency' | 'records' | 'name';
+type SortKey = 'updatedAt' | 'createdAt' | 'category' | 'creator' | 'usageFrequency' | 'records' | 'stars' | 'rating' | 'heat' | 'name';
 
 const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'updatedAt', label: '更新时间（新到旧）' },
@@ -35,6 +41,9 @@ const SORT_OPTIONS: { key: SortKey; label: string }[] = [
   { key: 'category', label: '类别（A-Z）' },
   { key: 'creator', label: '创建者（A-Z）' },
   { key: 'usageFrequency', label: '使用频率（高到低）' },
+  { key: 'heat', label: '综合热度' },
+  { key: 'rating', label: '评分优先' },
+  { key: 'stars', label: '收藏优先' },
   { key: 'records', label: '数据量' },
   { key: 'name', label: '名称 A-Z' },
 ];
@@ -70,10 +79,14 @@ export default function DatasetsPage() {
   const [datasets, setDatasets] = useState<Dataset[]>(() => getRuntimeDatasets());
   const [showSortMenu, setShowSortMenu] = useState(false);
   const [batchAccessTarget, setBatchAccessTarget] = useState<DatasetAccessLevel>('team');
+  const [hotSort, setHotSort] = useState<MarketplaceRankingMetric>('heat');
 
   const currentUser = '张远航';
 
+  const hotData = useMemo(() => rankMarketplaceAssets(datasets, hotSort).slice(0, 10), [datasets, hotSort]);
+
   const filtered = useMemo(() => {
+    if (tab === 'hot') return hotData;
     let list = datasets.filter(d => {
       if (tab === 'mine' && d.creator !== currentUser) return false;
       if (tab === 'public' && d.accessLevel !== 'public') return false;
@@ -92,19 +105,23 @@ export default function DatasetsPage() {
       if (sortKey === 'category') return a.category.localeCompare(b.category);
       if (sortKey === 'creator') return a.creator.localeCompare(b.creator);
       if (sortKey === 'usageFrequency') return b.downloads - a.downloads;
+      if (sortKey === 'heat') return getMarketplaceHeat(b) - getMarketplaceHeat(a);
+      if (sortKey === 'rating') return b.rating - a.rating;
+      if (sortKey === 'stars') return b.stars - a.stars;
       if (sortKey === 'records') return b.records - a.records;
       if (sortKey === 'name') return a.name.localeCompare(b.name);
       return 0;
     });
     return list;
-  }, [datasets, tab, search, sortKey, selectedTask, selectedAccess]);
+  }, [datasets, tab, search, sortKey, selectedTask, selectedAccess, hotData]);
 
   const pageData = filtered.slice((page - 1) * 9, page * 9);
 
   const toggleSelect = (id: string) => {
     setSelected(prev => {
       const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
       return next;
     });
   };
@@ -129,6 +146,15 @@ export default function DatasetsPage() {
     toast.success(`已将 ${selected.size} 个数据集授权级别调整为${targetLabel}`);
     setSelected(new Set());
   };
+
+  const renderStars = (rating: number) => (
+    <span className="flex items-center gap-0.5">
+      {Array.from({ length: 5 }, (_, index) => (
+        <Star key={index} size={10} className={index < Math.round(rating) ? 'text-warning fill-warning' : 'text-text-muted'} />
+      ))}
+      <span className="ml-0.5 text-[10px] text-text-muted">{rating.toFixed(1)}</span>
+    </span>
+  );
 
   useEffect(() => {
     saveRuntimeDatasets(datasets);
@@ -155,6 +181,7 @@ export default function DatasetsPage() {
           { key: 'mine', label: '我的', count: datasets.filter(d => d.creator === currentUser).length },
           { key: 'public', label: '公开', count: datasets.filter(d => d.accessLevel === 'public').length },
           { key: 'encrypted', label: '加密保护', count: datasets.filter(d => d.encryptionEnabled).length },
+          { key: 'hot', label: '热度榜', icon: <Flame size={13} /> },
         ]}
         active={tab}
         onChange={v => { setTab(v); setPage(1); setSelected(new Set()); }}
@@ -225,6 +252,58 @@ export default function DatasetsPage() {
         </Card>
       )}
 
+      {tab === 'hot' && (
+        <Card>
+          <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <Flame size={16} className="text-warning" />
+                <h3 className="text-sm font-semibold text-text-primary">数据集热度榜 TOP 10</h3>
+              </div>
+              <p className="mt-1 text-xs text-text-muted">热度综合下载、收藏、评分与社区评论，避免单一指标失真。</p>
+            </div>
+            <div className="flex items-center gap-1">
+              {([['heat', '综合热度'], ['downloads', '下载量'], ['stars', '收藏数'], ['rating', '综合评分']] as const).map(([key, label]) => (
+                <button key={key} onClick={() => setHotSort(key)}
+                  className={`rounded border px-2.5 py-1 text-xs transition-colors ${hotSort === key ? 'border-primary/40 bg-primary/15 text-primary' : 'border-border text-text-muted hover:text-text-primary'}`}>
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="space-y-2">
+            {hotData.map((dataset, index) => (
+              <div key={dataset.id} className="flex items-center gap-4 rounded-xl border border-border p-3 transition-colors hover:bg-white/[0.03]">
+                <span className={`flex h-7 w-7 shrink-0 items-center justify-center rounded-lg text-sm font-bold ${
+                  index === 0 ? 'bg-warning/20 text-warning' : index === 1 ? 'bg-gray-400/20 text-gray-400' : index === 2 ? 'bg-orange-400/20 text-orange-400' : 'bg-white/5 text-text-muted'
+                }`}>
+                  {index === 0 ? <Award size={14} /> : index + 1}
+                </span>
+                <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-accent/15 text-accent">
+                  <Database size={14} />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <Link to={`/user/datasets/${dataset.id}`} className="truncate text-sm font-medium text-text-primary hover:text-primary">{dataset.name}</Link>
+                  <p className="truncate text-xs text-text-muted">{dataset.description}</p>
+                </div>
+                <div className="flex shrink-0 items-center gap-4 text-xs text-text-muted">
+                  <span className="flex items-center gap-1 text-primary"><Flame size={11} />{getMarketplaceHeat(dataset)}</span>
+                  <span className="flex items-center gap-1"><Download size={11} />{dataset.downloads.toLocaleString()}</span>
+                  <span className="flex items-center gap-1"><Star size={11} className="text-warning" />{dataset.stars}</span>
+                  {renderStars(dataset.rating)}
+                  <span className="flex items-center gap-1"><MessageSquare size={11} />{dataset.reviews}</span>
+                </div>
+                <Link to={`/user/datasets/${dataset.id}?tab=reviews`}
+                  className="flex shrink-0 items-center gap-1 rounded border border-border px-2 py-1 text-xs text-text-muted transition-colors hover:border-primary/40 hover:text-primary">
+                  <MessageSquare size={11} />评价
+                </Link>
+                <TrendingUp size={12} className="shrink-0 text-success" />
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       {/* Batch action bar */}
       {selected.size > 0 && (
         <div className="flex items-center gap-3 px-4 py-2.5 bg-primary/10 border border-primary/20 rounded-lg">
@@ -267,7 +346,7 @@ export default function DatasetsPage() {
         <span className="text-xs text-text-muted ml-2">共 {filtered.length} 条结果</span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+      {tab !== 'hot' && <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {pageData.map(ds => (
           <div key={ds.id} className="relative group">
             <button onClick={e => { e.preventDefault(); toggleSelect(ds.id); }}
@@ -307,6 +386,7 @@ export default function DatasetsPage() {
                   <span className="flex items-center gap-1"><Layers size={11} />{ds.size}</span>
                   <span className="flex items-center gap-1"><BarChart2 size={11} />{ds.records.toLocaleString()} 条</span>
                   <span className="flex items-center gap-1"><Download size={11} />{ds.downloads}</span>
+                  <span className="flex items-center gap-1"><Star size={11} className="text-warning" />{ds.stars}</span>
                   <span className="flex items-center gap-1"><Calendar size={11} />{ds.updatedAt.slice(0, 10)}</span>
                 </div>
                 <div className="flex items-center justify-between mt-3">
@@ -321,6 +401,8 @@ export default function DatasetsPage() {
                     {ds.versions.length > 1 && (
                       <span className="flex items-center gap-0.5"><GitBranch size={10} />{ds.versions.length} 版本</span>
                     )}
+                    {renderStars(ds.rating)}
+                    <span className="flex items-center gap-0.5"><MessageSquare size={10} />{ds.reviews}</span>
                     <span className="flex items-center gap-0.5"><Eye size={10} />{Math.floor(ds.downloads * 3.2)}</span>
                     <span className="flex items-center gap-0.5"><Clock size={10} />{Math.floor(ds.downloads / 10 + 5)}次操作</span>
                   </div>
@@ -350,9 +432,10 @@ export default function DatasetsPage() {
             </Link>
           </div>
         ))}
-      </div>
+      </div>}
 
-      <Pagination page={page} total={filtered.length} pageSize={9} onChange={setPage} />
+      {tab !== 'hot' && <Pagination page={page} total={filtered.length} pageSize={9} onChange={setPage} />}
+
     </div>
   );
 }

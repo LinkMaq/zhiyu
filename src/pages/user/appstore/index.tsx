@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { LayoutGrid, Search, Star, Download, ExternalLink, Sparkles, BrainCircuit, Eye, Mic, Code2, FlaskConical, BarChart2, MessageSquare, Key, Play, ThumbsUp, Pin, Filter, Globe, Users, Lock, GitBranch, RefreshCw, Activity } from 'lucide-react';
+import { LayoutGrid, Search, Star, Download, ExternalLink, Sparkles, BrainCircuit, Eye, Mic, Code2, FlaskConical, BarChart2, MessageSquare, Key, Play, ThumbsUp, Pin, Filter, Globe, Users, Lock, GitBranch, RefreshCw, Activity, FileCog } from 'lucide-react';
 import { PageHeader } from '../../../components/layout/PageHeader';
 import { Card } from '../../../components/ui/Card';
 import { Badge } from '../../../components/ui/Badge';
@@ -7,11 +7,21 @@ import { Button } from '../../../components/ui/Button';
 import { Modal } from '../../../components/ui/Modal';
 import { Input, Select } from '../../../components/ui/Input';
 import { useToast } from '../../../hooks/useToast';
+import { AppTemplateManagementModal } from './AppTemplateManagementModal';
 import { mockApps } from '../../../data/mockData';
+import {
+  APP_INDUSTRIES,
+  appMatchesIndustry,
+  getAppIndustryGroups,
+  getTemplateConfig,
+  mockApplicationTemplates,
+  resolveAppIndustry,
+  type AppIndustry,
+  type ApplicationTemplate,
+  type ApplicationTemplateConfig,
+} from '../../../data/appMarketplace';
 import type { AppRuntimeLog, AppSpace } from '../../../types';
 
-const CATS = ['全部', '大语言模型', '视觉感知', '语音处理', '代码辅助', '科学计算', '数据分析'];
-const INDUSTRIES = ['全行业', '金融', '政务', '国防', '教育', '医疗', '工业'];
 const SORT_OPTS = [
   { value: 'stars', label: '热度优先' },
   { value: 'rating', label: '评分优先' },
@@ -21,7 +31,7 @@ const SORT_OPTS = [
 
 const catMap: Record<string, string> = {
   llm: '大语言模型', vision: '视觉感知', audio: '语音处理',
-  tool: '代码辅助', multimodal: '视觉感知',
+  tool: '代码辅助', multimodal: '视觉感知', workflow: '数据分析',
 };
 
 const categoryIcon: Record<string, React.ReactElement> = {
@@ -96,14 +106,7 @@ const REGION_OPTIONS = [
   { value: '跨区共享', label: '跨区共享' },
 ];
 
-const INDUSTRY_OPTIONS = [
-  { value: '全行业', label: '全行业' },
-  { value: '金融', label: '金融' },
-  { value: '政务', label: '政务' },
-  { value: '教育', label: '教育' },
-  { value: '医疗', label: '医疗' },
-  { value: '工业', label: '工业' },
-];
+const INDUSTRY_OPTIONS = APP_INDUSTRIES.map(industry => ({ value: industry, label: industry }));
 
 type CloudInstanceStatus = 'deploying' | 'running' | 'stopped' | 'error';
 
@@ -184,25 +187,16 @@ const CLOUD_DEFAULT_INSTANCES: CloudAppInstance[] = [
   },
 ];
 
-interface AppSpaceForm {
+interface AppSpaceForm extends ApplicationTemplateConfig {
   name: string;
-  modelName: string;
-  sourceRepo: string;
-  gitBranch: string;
   previewUrl: string;
-  cluster: string;
   namespace: string;
-  cpu: string;
-  memory: string;
-  gpuType: string;
-  gpuCount: string;
-  runtimeEnvironment: string;
-  capabilities: string;
-  description: string;
 }
 
 const DEFAULT_APP_SPACE_FORM: AppSpaceForm = {
   name: '',
+  category: 'llm',
+  industry: '全行业',
   modelName: '',
   sourceRepo: '',
   gitBranch: 'main',
@@ -217,6 +211,15 @@ const DEFAULT_APP_SPACE_FORM: AppSpaceForm = {
   capabilities: '',
   description: '',
 };
+
+function appFormFromTemplate(template: ApplicationTemplate): AppSpaceForm {
+  return {
+    name: `${template.name} 应用`,
+    ...getTemplateConfig(template),
+    previewUrl: '',
+    namespace: '',
+  };
+}
 
 function buildRuntimeLogs(app: AppSpace): AppRuntimeLog[] {
   if (app.runtimeLogs?.length) return app.runtimeLogs;
@@ -247,7 +250,7 @@ function AppDetailModal({ app, onClose, onUpdateApp }: { app: AppSpace; onClose:
   const [subscribed, setSubscribed] = useState(false);
   const [selectedSnapshot, setSelectedSnapshot] = useState(VERSION_SNAPSHOTS[0].version);
   const [shareScope, setShareScope] = useState(app.accessLevel === 'public' ? 'public' : app.accessLevel === 'tenant' ? 'tenant' : 'workspace');
-  const [industryScope, setIndustryScope] = useState(app.industry?.[0] ?? '全行业');
+  const [industryScope, setIndustryScope] = useState(resolveAppIndustry(app.industry));
   const [regionScope, setRegionScope] = useState('绵阳专区');
   const [callLimit, setCallLimit] = useState('10000');
   const [concurrencyLimit, setConcurrencyLimit] = useState('20');
@@ -285,7 +288,7 @@ function AppDetailModal({ app, onClose, onUpdateApp }: { app: AppSpace; onClose:
     setDemoLoading(false);
   };
 
-  const apiKey = `sk-zhiyun-${Math.random().toString(36).slice(2, 14)}`;
+  const [apiKey] = useState(() => `sk-zhiyun-${Math.random().toString(36).slice(2, 14)}`);
   const snapshotDetail = VERSION_SNAPSHOTS.find(item => item.version === selectedSnapshot) ?? VERSION_SNAPSHOTS[0];
 
   const handleRollback = () => {
@@ -636,7 +639,7 @@ print(resp.json()["choices"][0]["message"]["content"])`}</pre>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                <Select label="行业场景" value={industryScope} onChange={event => setIndustryScope(event.target.value)} options={INDUSTRY_OPTIONS} />
+                <Select label="行业场景" value={industryScope} onChange={event => setIndustryScope(event.target.value as AppIndustry)} options={INDUSTRY_OPTIONS} />
                 <Select label="地域范围" value={regionScope} onChange={event => setRegionScope(event.target.value)} options={REGION_OPTIONS} />
                 <Input label="调用次数上限" value={callLimit} onChange={event => setCallLimit(event.target.value)} />
                 <Input label="并发数上限" value={concurrencyLimit} onChange={event => setConcurrencyLimit(event.target.value)} />
@@ -1068,8 +1071,7 @@ print(resp.json()["choices"][0]["message"]["content"])`}</pre>
 
 export default function AppStorePage() {
   const { toast } = useToast();
-  const [cat, setCat] = useState('全部');
-  const [industry, setIndustry] = useState('全行业');
+  const [industry, setIndustry] = useState<AppIndustry>('全行业');
   const [search, setSearch] = useState('');
   const [sortBy, setSortBy] = useState('stars');
   const [apps, setApps] = useState<AppSpace[]>(() => mockApps.map(app => ({
@@ -1080,6 +1082,8 @@ export default function AppStorePage() {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [createOpen, setCreateOpen] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [templateManageOpen, setTemplateManageOpen] = useState(false);
+  const [appTemplates, setAppTemplates] = useState<ApplicationTemplate[]>(mockApplicationTemplates);
   const [createForm, setCreateForm] = useState<AppSpaceForm>(DEFAULT_APP_SPACE_FORM);
 
   const selected = selectedId ? apps.find(app => app.id === selectedId) ?? null : null;
@@ -1091,6 +1095,51 @@ export default function AppStorePage() {
   const openCreateAppSpace = () => {
     setCreateForm(DEFAULT_APP_SPACE_FORM);
     setCreateOpen(true);
+  };
+
+  const createFromTemplate = (template: ApplicationTemplate) => {
+    if (template.status === 'disabled') {
+      toast.warning('模板已停用', '请先启用该模板，或选择其他可用模板。');
+      return;
+    }
+    setCreateForm(appFormFromTemplate(template));
+    setTemplateManageOpen(false);
+    setCreateOpen(true);
+    toast.info('模板配置已带入', `已基于「${template.name}」创建应用空间配置。`);
+  };
+
+  const cloneApplicationTemplate = (template: ApplicationTemplate) => {
+    const now = new Date().toLocaleDateString('zh-CN');
+    const cloned: ApplicationTemplate = {
+      ...template,
+      id: `app-tpl-${Date.now()}`,
+      name: `${template.name} - 副本`,
+      status: 'enabled',
+      source: 'user',
+      updatedAt: now,
+    };
+    setAppTemplates(previous => [cloned, ...previous]);
+    toast.success('模板已克隆', `已创建「${cloned.name}」，可继续用于构建应用空间。`);
+  };
+
+  const toggleApplicationTemplate = (id: string) => {
+    setAppTemplates(previous => previous.map(template => template.id === id ? { ...template, status: template.status === 'enabled' ? 'disabled' : 'enabled', updatedAt: new Date().toLocaleDateString('zh-CN') } : template));
+  };
+
+  const deleteApplicationTemplate = (template: ApplicationTemplate) => {
+    if (template.source === 'platform') {
+      toast.warning('平台模板不可删除', '可通过停用控制其是否可被用于创建应用。');
+      return;
+    }
+    setAppTemplates(previous => previous.filter(item => item.id !== template.id));
+    toast.success('用户模板已删除', template.name);
+  };
+
+  const handleTemplateAction = (action: 'create' | 'clone' | 'toggle' | 'delete', template: ApplicationTemplate) => {
+    if (action === 'create') return createFromTemplate(template);
+    if (action === 'clone') return cloneApplicationTemplate(template);
+    if (action === 'toggle') return toggleApplicationTemplate(template.id);
+    deleteApplicationTemplate(template);
   };
 
   const createAppSpace = async () => {
@@ -1120,7 +1169,7 @@ export default function AppStorePage() {
       id: `app${Date.now()}`,
       name: createForm.name.trim(),
       description: createForm.description.trim() || '模型类应用空间，支持自动构建、在线部署与预览。',
-      category: 'llm',
+      category: createForm.category,
       status: 'deploying',
       featured: true,
       pinned: false,
@@ -1155,7 +1204,7 @@ export default function AppStorePage() {
       createdAt,
       updatedAt: createdAt,
       hasDemoTrial: true,
-      industry: industry === '全行业' ? ['全行业'] : [industry],
+      industry: createForm.industry === '全行业' ? ['全行业'] : [createForm.industry],
       accessLevel: 'tenant',
       subscribeCount: 0,
       demoUrl: createForm.previewUrl.trim() || undefined,
@@ -1187,9 +1236,7 @@ export default function AppStorePage() {
 
   const filtered = apps
     .filter(a => {
-      const appCat = catMap[a.category] ?? a.category;
-      if (cat !== '全部' && appCat !== cat) return false;
-      if (industry !== '全行业' && !a.industry?.includes(industry)) return false;
+      if (industry !== '全行业' && !appMatchesIndustry(a.industry, industry)) return false;
       if (search && !a.name.includes(search) && !a.description.includes(search)) return false;
       return true;
     })
@@ -1204,6 +1251,7 @@ export default function AppStorePage() {
   const hotRank = [...filtered]
     .sort((a, b) => (b.downloads + b.stars * 5 + b.rating * 100) - (a.downloads + a.stars * 5 + a.rating * 100))
     .slice(0, 3);
+  const industryGroups = getAppIndustryGroups(apps).filter(group => group.count > 0);
 
   return (
     <div className="space-y-6 animate-fade-in">
@@ -1221,6 +1269,7 @@ export default function AppStorePage() {
           </div>
           <div className="flex items-center gap-2 flex-wrap">
             <Button size="sm" leftIcon={<LayoutGrid size={12} />} onClick={openCreateAppSpace}>构建应用空间</Button>
+            <Button size="sm" variant="outline" leftIcon={<FileCog size={12} />} onClick={() => setTemplateManageOpen(true)}>应用模板（{appTemplates.length}）</Button>
             <Button size="sm" variant="outline" leftIcon={<RefreshCw size={12} />} onClick={() => toast.success('运行态已刷新', '应用空间、日志与能力概览已更新')}>刷新状态</Button>
           </div>
         </div>
@@ -1273,6 +1322,8 @@ export default function AppStorePage() {
             <div className="space-y-4">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <Input label="空间名称" value={createForm.name} onChange={event => setCreateForm(prev => ({ ...prev, name: event.target.value }))} placeholder="例如：金融知识库空间" />
+                <Select label="应用类型" value={createForm.category} onChange={event => setCreateForm(prev => ({ ...prev, category: event.target.value as AppSpace['category'] }))} options={[{ value: 'llm', label: '大语言模型' }, { value: 'vision', label: '视觉感知' }, { value: 'audio', label: '语音处理' }, { value: 'multimodal', label: '多模态应用' }, { value: 'tool', label: '代码辅助' }, { value: 'workflow', label: '流程与数据分析' }]} />
+                <Select label="所属行业" value={createForm.industry} onChange={event => setCreateForm(prev => ({ ...prev, industry: event.target.value as AppIndustry }))} options={INDUSTRY_OPTIONS} />
                 <Input label="模型名称" value={createForm.modelName} onChange={event => setCreateForm(prev => ({ ...prev, modelName: event.target.value }))} placeholder="例如：Qwen2.5-72B-Instruct-ZY" />
                 <Input label="Git 仓库" value={createForm.sourceRepo} onChange={event => setCreateForm(prev => ({ ...prev, sourceRepo: event.target.value }))} placeholder="git@code.zhiyun.ai:ai/space.git" />
                 <Input label="Git 分支" value={createForm.gitBranch} onChange={event => setCreateForm(prev => ({ ...prev, gitBranch: event.target.value }))} />
@@ -1370,33 +1421,15 @@ export default function AppStorePage() {
         </div>
       )}
 
-      {/* Filters row */}
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="relative">
-          <Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" />
-          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索应用..."
-            className="bg-surface border border-border rounded-lg pl-8 pr-3 py-1.5 text-sm text-text-primary placeholder:text-text-muted focus:outline-none focus:border-primary/60 transition-colors w-44" />
+      <Card noPadding className="overflow-hidden">
+        <div className="flex flex-col gap-3 p-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div className="relative"><Search size={13} className="absolute left-2.5 top-1/2 -translate-y-1/2 text-text-muted" /><input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜索应用..." className="w-56 rounded-lg border border-border bg-surface py-1.5 pl-8 pr-3 text-sm text-text-primary transition-colors placeholder:text-text-muted focus:border-primary/60 focus:outline-none" /></div>
+            <select value={sortBy} onChange={e => setSortBy(e.target.value)} className="rounded-lg border border-border bg-surface px-2 py-1.5 text-xs text-text-secondary focus:border-primary/60 focus:outline-none">{SORT_OPTS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}</select>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3"><span className="mr-1 flex items-center gap-1 text-xs font-medium text-text-secondary"><Filter size={13} className="text-primary" />行业</span><button type="button" onClick={() => setIndustry('全行业')} className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${industry === '全行业' ? 'border-primary bg-primary/15 text-primary' : 'border-border text-text-muted hover:border-primary/35'}`}>全部 <span className="ml-1 opacity-70">{apps.length}</span></button>{industryGroups.map(group => <button key={group.name} type="button" onClick={() => setIndustry(group.name)} className={`rounded-lg border px-3 py-1.5 text-xs transition-colors ${industry === group.name ? 'border-primary bg-primary/15 text-primary' : 'border-border text-text-muted hover:border-primary/35'}`}>{group.name} <span className="ml-1 opacity-70">{group.count}</span></button>)}</div>
         </div>
-        <div className="flex items-center gap-1.5 overflow-x-auto">
-          {CATS.map(c => (
-            <button key={c} onClick={() => setCat(c)}
-              className={`px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${cat === c ? 'bg-primary text-white' : 'bg-white/5 text-text-muted hover:bg-white/10'}`}>
-              {c}
-            </button>
-          ))}
-        </div>
-        <div className="flex items-center gap-1.5 ml-auto">
-          <Filter size={13} className="text-text-muted" />
-          <select value={industry} onChange={e => setIndustry(e.target.value)}
-            className="bg-surface border border-border rounded-lg px-2 py-1.5 text-xs text-text-secondary focus:outline-none focus:border-primary/60">
-            {INDUSTRIES.map(i => <option key={i} value={i}>{i}</option>)}
-          </select>
-          <select value={sortBy} onChange={e => setSortBy(e.target.value)}
-            className="bg-surface border border-border rounded-lg px-2 py-1.5 text-xs text-text-secondary focus:outline-none focus:border-primary/60">
-            {SORT_OPTS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-        </div>
-      </div>
+      </Card>
 
       {/* App grid */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
@@ -1419,6 +1452,7 @@ export default function AppStorePage() {
               {app.featured && <Badge variant="primary" className="text-[10px]"><Sparkles size={8} className="inline mr-0.5" />精选</Badge>}
               {app.hasDemoTrial && <Badge variant="success" className="text-[10px]"><Play size={8} className="inline mr-0.5" />在线交互</Badge>}
               <Badge variant="ghost" className="text-[10px]">{catMap[app.category] ?? app.category}</Badge>
+              <Badge variant="accent" className="text-[10px]">{resolveAppIndustry(app.industry)}</Badge>
               <Badge variant={app.status === 'running' ? 'success' : app.status === 'deploying' ? 'primary' : app.status === 'stopped' ? 'ghost' : 'error'} className="text-[10px]">
                 {app.status === 'running' ? '运行中' : app.status === 'deploying' ? '部署中' : app.status === 'stopped' ? '已停止' : '异常'}
               </Badge>
@@ -1431,6 +1465,14 @@ export default function AppStorePage() {
           </Card>
         ))}
       </div>
+
+      <AppTemplateManagementModal
+        open={templateManageOpen}
+        templates={appTemplates}
+        onClose={() => setTemplateManageOpen(false)}
+        onAction={handleTemplateAction}
+        categoryIcon={category => categoryIcon[catMap[category] ?? category]}
+      />
 
       {selected && <AppDetailModal app={selected} onClose={() => setSelectedId(null)} onUpdateApp={updater => updateApp(selected.id, updater)} />}
     </div>
